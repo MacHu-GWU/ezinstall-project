@@ -7,7 +7,7 @@ python:
 install:
   - pip install . # Install it self
   - pip install --upgrade pytest # Upgrade pytest to lastest
-script: py.test
+script: py.test tests
 notifications:
   slack:
     on_success: never

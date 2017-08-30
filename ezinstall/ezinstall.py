@@ -3,11 +3,12 @@
 
 """
 ``ezinstall (Easy install)`` is a package allows you to instantly install
-package to your python environment, by simply copy the source code to
-``site-packages`` directory. **It install to virtual environment** when 
-inside a virtual environment.
+package to your python environment **without having** ``setup.py`` file.
+It simply copy the source code to ``site-packages`` directory.
+**It also works for virtualenv**. The behavior is exactly the same as
+``pip install setup.py --ignore-installed``.
 
-Compared to ``pip install setup.py``, its fast!
+It doesn't install any dependencies from ``requirement.txt``.
 
 -------------------------------------------------------------------------------
 
@@ -35,98 +36,42 @@ SOFTWARE.
 from __future__ import print_function, unicode_literals
 import os
 from os.path import (
-    isabs, join, abspath, dirname, basename, split, splitext,
-    isfile, isdir, exists,
+    isabs, join, abspath, dirname, basename, splitext, exists,
+    isdir, isfile,
 )
 import shutil
 import hashlib
 import sys
-import site
 import platform
 
-
-#--- Operation System ---
-class OperationSystem(object):
-    activate_script = None
-    executable_python = None
-    executable_pip = None
-    venv_site_packages = None
-
-    @classmethod
-    def get_site_packages(cls):
-        """
-        Get system ``site-packages`` path.
-        """
-        raise NotImplementedError
-
-    @classmethod
-    def get_venv_site_packages(cls, venv_path):
-        """
-        Get virtual environment ``site-packages`` path.
-        """
-        return join(venv_path, cls.venv_site_packages)
-
-
-class Windows(OperationSystem):
-    script_dir = "Scripts"
-    activate_script = r"%s\activate.bat" % script_dir
-    executable_python = r"%s\python.exe" % script_dir
-    executable_pip = r"%s\pip.exe" % script_dir
-    venv_site_packages = r"Lib\site-packages"
-
-    @classmethod
-    def get_site_packages(cls):
-        """
-        Get system ``site-packages`` path.
-        """
-        try:
-            return site.getsitepackages()[1]
-        except AttributeError:
-            return None
-
-
-class MacOS(OperationSystem):
-    script_dir = "bin"
-    activate_script = "%s/activate" % script_dir
-    executable_python = "%s/python" % script_dir
-    executable_pip = "%s/pip" % script_dir
-    venv_site_packages = "lib/python%s.%s/site-packages" % (
-        sys.version_info.major, sys.version_info.minor,
-    )
-
-    @classmethod
-    def get_site_packages(cls):
-        """
-        Get system ``site-packages`` path.
-        """
-        try:
-            return site.getsitepackages()[0]
-        except AttributeError:
-            return None
-
-
-class Linux(MacOS):
-    pass
-
+py_ver_major = sys.version_info.major
+py_ver_minor = sys.version_info.minor
+py_ver_micro = sys.version_info.micro
 
 system = None
 is_posix = None
 
 system_name = platform.system()
 if system_name == "Windows":
-    system = Windows
+    site_packages_path = join(
+        dirname(sys.executable),
+        "Lib",
+        "site-packages",
+    )
     is_posix = False
-elif system_name == "Darwin":
-    system = MacOS
-    is_posix = True
-elif system_name == "Linux":
-    system = Linux
+elif system_name in ["Darwin", "Linux"]:
+    site_packages_path = join(
+        dirname(dirname(sys.executable)),
+        "lib",
+        "python%s.%s" % (py_ver_major, py_ver_minor),
+        "site-packages",
+    )
     is_posix = True
 else:
     raise Exception("Unknown Operation System!")
 
 
-#--- Path ---
+# --- Path ---
 class Path(object):
     """Represent a path.
     """
@@ -229,48 +174,6 @@ class Path(object):
         return self.abspath == other.abspath
 
 
-def is_virtualenv(dirpath):
-    """
-    Test if a directory is a virtual environment. By checking if all of these
-    file exists::
-
-        - dirpath/<path-to-activate-script>
-        - dirpath/<path-to-executable-python>
-        - dirpath/<path-to-executable-pip>
-    """
-    check_list = [
-        system.activate_script,
-        system.executable_python,
-        system.executable_pip,
-    ]
-
-    for relpath in check_list:
-        p = Path(dirpath, relpath)
-        if not p.exists():
-            return False
-
-    return True
-
-
-def is_in_virtualen(filepath):
-    """
-    Test if a file is in virtual environment. By test that any of its parent 
-    directory is virtual environment.
-    """
-    dirpath = Path(filepath).absolute().parent
-
-    dirpath_list = [dirpath, ]
-    p = dirpath
-    for i in range(len(dirpath.parts) - 1):
-        p = p.parent
-        dirpath_list.append(p)
-
-    for dirpath in dirpath_list:
-        if is_virtualenv(dirpath):
-            return True, dirpath.abspath
-    return False, None
-
-
 def remove_pyc_file(package_dirpath):
     """
     Remove all ``__pycache__`` folder and ``.pyc`` file from a directory.
@@ -346,19 +249,23 @@ class Printer(object):
             print(message)
 
 
-def install(path, verbose=True):
+def install(package_dir, verbose=True):
     """Easy install main script.
 
     Create a ``zzz_ezinstall.py`` file, and put in your package folder (Next to
     the ``__init__.py`` file), and put following content::
 
-        # content of zzz_ezinstall.py
+        #!/usr/bin/env python
+        # -*- coding: utf-8 -*-
 
         if __name__ == "__main__":
+            import os
             from ezinstall import install
 
-            install(__file__)
+            install(os.path.dirname(__file__))
 
+    :param package_dir: package source code directory.
+    :param verbose: trigger to open log info.
     """
     if verbose:
         Printer.verbose = True
@@ -366,17 +273,12 @@ def install(path, verbose=True):
         Printer.verbose = False
 
     # locate source directory
-    p = Path(path).absolute().parent
+    p = Path(package_dir).absolute()
 
     package_name = p.basename
     src = p.abspath
 
     # locate destination directory
-    flag, venv_path = is_in_virtualen(path)
-    if flag:
-        site_packages_path = system.get_venv_site_packages(venv_path)
-    else:
-        site_packages_path = system.get_site_packages()
     dst = join(site_packages_path, package_name)
 
     # See if needs to install
@@ -413,4 +315,6 @@ def install(path, verbose=True):
 
 
 if __name__ == "__main__":
-    install(__file__)
+    import os
+
+    install(os.path.dirname(__file__))
